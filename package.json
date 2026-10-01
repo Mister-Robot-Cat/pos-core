@@ -1,0 +1,19 @@
+{
+  "name": "@mister-robot-cat/pos-core",
+  "version": "0.1.0",
+  "description": "A dependency-free, headless core engine for Point-of-Sale (POS) systems, decoupled from UI.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "author": "Mister-Robot-Cat",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
