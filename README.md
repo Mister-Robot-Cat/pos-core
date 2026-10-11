@@ -5,6 +5,7 @@ A dependency-free, headless core engine for Point-of-Sale (POS) systems, decoupl
 ## Features
 - Shopping cart logic
 - Discount engine (percentage, fixed amount, item and cart level)
+- Tax calculation engine (inclusive and exclusive rates, item and cart discount apportioning, fiscal breakdown)
 - Robust monetary math using minor units (cents/qəpik)
 - Zero dependencies
 - Fully typed (TypeScript)

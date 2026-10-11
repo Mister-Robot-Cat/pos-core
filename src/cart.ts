@@ -1,15 +1,19 @@
 import { Discount, calculateDiscountAmount } from './discount.js';
+import { TaxRate, TaxSummary, TaxLineBreakdown, calculateTaxAmount } from './tax.js';
 
 export interface CartItem {
   id: string;
   name: string;
   priceMinor: number; // Price in minor units (e.g., cents, qəpik)
   quantity: number;
+  taxRateId?: string; // Optional tax rate ID specific to this item
 }
 
 export class Cart {
   private items: Map<string, CartItem> = new Map();
   private discounts: Map<string, Discount> = new Map();
+  private taxRates: Map<string, TaxRate> = new Map();
+  private defaultTaxRateId?: string;
 
   /**
    * Adds an item to the cart or increments its quantity if it already exists.
@@ -20,12 +24,16 @@ export class Cart {
 
     if (existing) {
       existing.quantity += quantity;
+      if (item.taxRateId !== undefined) {
+        existing.taxRateId = item.taxRateId;
+      }
     } else {
       this.items.set(item.id, {
         id: item.id,
         name: item.name,
         priceMinor: item.priceMinor,
         quantity,
+        taxRateId: item.taxRateId,
       });
     }
   }
@@ -87,6 +95,44 @@ export class Cart {
   }
 
   /**
+   * Adds or updates a tax rate in the cart.
+   */
+  addTaxRate(rate: TaxRate): void {
+    this.taxRates.set(rate.id, rate);
+  }
+
+  /**
+   * Removes a tax rate by ID.
+   */
+  removeTaxRate(id: string): void {
+    this.taxRates.delete(id);
+    if (this.defaultTaxRateId === id) {
+      this.defaultTaxRateId = undefined;
+    }
+  }
+
+  /**
+   * Returns all registered tax rates.
+   */
+  getTaxRates(): TaxRate[] {
+    return Array.from(this.taxRates.values());
+  }
+
+  /**
+   * Sets the default fallback tax rate ID for items without an explicit taxRateId.
+   */
+  setDefaultTaxRateId(id?: string): void {
+    this.defaultTaxRateId = id;
+  }
+
+  /**
+   * Returns the current default tax rate ID.
+   */
+  getDefaultTaxRateId(): string | undefined {
+    return this.defaultTaxRateId;
+  }
+
+  /**
    * Calculates subtotal of all items before discounts in minor units.
    */
   getSubtotalMinor(): number {
@@ -133,11 +179,136 @@ export class Cart {
   }
 
   /**
-   * Calculates the final total price after discounts in minor units.
+   * Calculates a full tax breakdown across all cart items,
+   * taking into account item-level and order-level discounts.
+   */
+  getTaxSummary(): TaxSummary {
+    const emptySummary: TaxSummary = {
+      breakdown: [],
+      totalTaxMinor: 0,
+      exclusiveTaxMinor: 0,
+      inclusiveTaxMinor: 0,
+    };
+
+    if (this.items.size === 0) {
+      return emptySummary;
+    }
+
+    // 1. Calculate item totals and item-level discounts
+    interface ItemTaxContext {
+      item: CartItem;
+      itemTotalMinor: number;
+      netAfterItemDiscountMinor: number;
+      taxRate?: TaxRate;
+    }
+
+    const contexts: ItemTaxContext[] = [];
+    let totalNetAfterItemDiscounts = 0;
+
+    for (const item of this.items.values()) {
+      const itemTotalMinor = item.priceMinor * item.quantity;
+      let itemDiscount = 0;
+
+      for (const discount of this.discounts.values()) {
+        if (discount.targetItemId === item.id) {
+          itemDiscount += calculateDiscountAmount(itemTotalMinor, discount);
+        }
+      }
+
+      const netAfterItemDiscountMinor = Math.max(0, itemTotalMinor - itemDiscount);
+      totalNetAfterItemDiscounts += netAfterItemDiscountMinor;
+
+      const rateId = item.taxRateId ?? this.defaultTaxRateId;
+      const taxRate = rateId ? this.taxRates.get(rateId) : undefined;
+
+      contexts.push({
+        item,
+        itemTotalMinor,
+        netAfterItemDiscountMinor,
+        taxRate,
+      });
+    }
+
+    // 2. Calculate cart-level discounts
+    let cartDiscountTotal = 0;
+    for (const discount of this.discounts.values()) {
+      if (!discount.targetItemId) {
+        cartDiscountTotal += calculateDiscountAmount(totalNetAfterItemDiscounts, discount);
+      }
+    }
+    const effectiveCartDiscount = Math.min(totalNetAfterItemDiscounts, cartDiscountTotal);
+
+    // 3. Apportion cart discounts to items and calculate taxes per rate
+    const breakdownMap = new Map<string, TaxLineBreakdown>();
+
+    for (const ctx of contexts) {
+      if (!ctx.taxRate || ctx.taxRate.ratePercent <= 0) {
+        continue;
+      }
+
+      let taxableBaseMinor = ctx.netAfterItemDiscountMinor;
+      if (totalNetAfterItemDiscounts > 0 && effectiveCartDiscount > 0) {
+        const ratio = (totalNetAfterItemDiscounts - effectiveCartDiscount) / totalNetAfterItemDiscounts;
+        taxableBaseMinor = Math.round(ctx.netAfterItemDiscountMinor * ratio);
+      }
+
+      if (taxableBaseMinor <= 0) {
+        continue;
+      }
+
+      const isInclusive = Boolean(ctx.taxRate.isInclusive);
+      const taxAmountMinor = calculateTaxAmount(
+        taxableBaseMinor,
+        ctx.taxRate.ratePercent,
+        isInclusive
+      );
+
+      const existing = breakdownMap.get(ctx.taxRate.id);
+      if (existing) {
+        existing.taxableBaseMinor += taxableBaseMinor;
+        existing.taxAmountMinor += taxAmountMinor;
+      } else {
+        breakdownMap.set(ctx.taxRate.id, {
+          taxRateId: ctx.taxRate.id,
+          name: ctx.taxRate.name,
+          ratePercent: ctx.taxRate.ratePercent,
+          isInclusive,
+          taxableBaseMinor,
+          taxAmountMinor,
+        });
+      }
+    }
+
+    const breakdown = Array.from(breakdownMap.values());
+    let totalTaxMinor = 0;
+    let exclusiveTaxMinor = 0;
+    let inclusiveTaxMinor = 0;
+
+    for (const line of breakdown) {
+      totalTaxMinor += line.taxAmountMinor;
+      if (line.isInclusive) {
+        inclusiveTaxMinor += line.taxAmountMinor;
+      } else {
+        exclusiveTaxMinor += line.taxAmountMinor;
+      }
+    }
+
+    return {
+      breakdown,
+      totalTaxMinor,
+      exclusiveTaxMinor,
+      inclusiveTaxMinor,
+    };
+  }
+
+  /**
+   * Calculates the final total price after discounts and exclusive taxes in minor units.
    */
   getTotalMinor(): number {
     const subtotal = this.getSubtotalMinor();
     const discount = this.getDiscountTotalMinor();
-    return Math.max(0, subtotal - discount);
+    const discounted = Math.max(0, subtotal - discount);
+    const { exclusiveTaxMinor } = this.getTaxSummary();
+    return discounted + exclusiveTaxMinor;
   }
 }
