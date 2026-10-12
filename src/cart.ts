@@ -1,5 +1,6 @@
 import { Discount, calculateDiscountAmount } from './discount.js';
 import { TaxRate, TaxSummary, TaxLineBreakdown, calculateTaxAmount } from './tax.js';
+import { PaymentSession, PaymentSessionOptions } from './payment.js';
 
 export interface CartItem {
   id: string;
@@ -310,5 +311,12 @@ export class Cart {
     const discounted = Math.max(0, subtotal - discount);
     const { exclusiveTaxMinor } = this.getTaxSummary();
     return discounted + exclusiveTaxMinor;
+  }
+
+  /**
+   * Creates a new PaymentSession initialized with the current cart total.
+   */
+  createPaymentSession(options?: PaymentSessionOptions): PaymentSession {
+    return new PaymentSession(this.getTotalMinor(), options);
   }
 }
